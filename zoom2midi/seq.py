@@ -41,6 +41,11 @@ class Note:
             self._channel = channel
             self._prop_x = 0  # this is the unknown 3rd byte of the note
 
+    def __repr__(self):
+        return "{:s}(start={:d}, length={:d}, channel={:d})".format(
+            self.__class__.__name__, self.start, self.length, self.channel
+        )
+
     @property
     def length(self):
         return (self._length_whole) * Duration.WHOLE + self._length_fraction
@@ -105,16 +110,28 @@ class Note:
 class Sequence:
     __slots__ = ("filename", "notes")
     _header = b"ZOOM R8    SAMPLER SEQ DATA VER0001            \x00"
+    _default_filename = "SMPLSEQ.ZDT"
     max_notes = 64 * 1024  # 65536
 
-    def __init__(self, filename="SMPLSEQ.ZDT"):
+    def __init__(self, filename=None):
         self.filename = filename
-        self.notes = []
+        self.notes = [Note()]
 
-        try:
-            self.read_file()
-        except FileNotFoundError:
-            print("File not found, sequence is empty.")
+        if filename is not None:
+            print("No file specified, sequence is empty.")
+            try:
+                self.read_file()
+            except TypeError as e:
+                print("Wrong filename format, ", e)
+
+    def __repr__(self):
+        return "{:s}([\n  {}])".format(
+            self.__class__.__name__,
+            ",\n  ".join([repr(note) for note in self.notes]),
+        )
+
+    def __len__(self):
+        return len(self.notes)
 
     @classmethod
     def _get_total_size(cls):
@@ -142,7 +159,9 @@ class Sequence:
             elif note.is_empty:
                 break
 
-        if len(self.notes) > i:
+        if len(self.notes) == 0:
+            self.notes.append(Note())
+        elif len(self.notes) > i:
             self.notes = self.notes[:i]
 
     def multiply_notes(self, times=None):
@@ -157,7 +176,9 @@ class Sequence:
     def _close(self):
         term = Note(b"\xff\xff\xff\xff")
         actual_max_notes = self.max_notes - 2  # because of 8 bytes eof
-        if len(self.notes) > actual_max_notes:
+        if len(self.notes) == 0:
+            self.notes.append(Note())
+        elif len(self.notes) > actual_max_notes:
             print("More notes than available space, truncating sequence!")
             self.notes = self.notes[:actual_max_notes]
             self.notes[-1] = term
@@ -190,7 +211,15 @@ class Sequence:
         messages.sort(key=lambda msg: msg["position"])
         return messages
 
-    def write_file(self):
+    def write_file(self, filename=None):
+        if self.filename is None:
+            if filename is None:
+                self.filename = self._default_filename
+                raise UserWarning(
+                    "No filename specified, set to {}".format(self._default_filename)
+                )
+            else:
+                self.filename = filename
         notes_left = self.trim_and_close()
         with open(self.filename, "wb") as fp:
             fp.seek(0)
@@ -204,8 +233,10 @@ class Sequence:
             empty_bar = b"\x00\x03\x00\xff"  # == Note().to_binary()
             fp.write(notes_left * empty_note + empty_bar + empty_note)
 
-    def read_file(self):
-        with open(self.filename, "rb") as fp:
+    def read_file(self, filename=None, append=False):
+        if not append:
+            self.notes = []
+        with open(self.filename or filename, "rb") as fp:
             fp.seek(0)
             header = fp.read(len(self._header))
             assert header == self._header

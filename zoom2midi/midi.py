@@ -1,15 +1,56 @@
 from mido import Message, MidiFile, MidiTrack
-from zoom2midi.seq import Duration, Note, Sequence
+from .seq import Duration, Note, Sequence
 
 
 class ZoomMidiFile(MidiFile):
-    def __init__(self, note_offset=0, sequence=None):
-        super().__init__(type=0)  # single track MIDI file
+    zoom_track_name = "ZOOM sequence"
+    _default_filename = "zoom.mid"
+
+    def __init__(
+        self,
+        *args,
+        note_offset=0,
+        zoom_track_nr=0,
+        sequence=None,
+        sequence_file=None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        if self.filename is None:
+            self.filename = self._default_filename
+
         self.tick_duration_ratio = self.ticks_per_beat / Duration.QUARTER
-        self.tracks.append(MidiTrack())
-        self.tracks[-1].name = "ZOOM sequence"
         self.note_offset = note_offset
-        self.seq = sequence if isinstance(sequence, Sequence) else Sequence()
+
+        self.zoom_track_nr = None
+
+        # find or create zoom track
+        if len(self.tracks) > zoom_track_nr and self._track_has_notes(zoom_track_nr):
+            self.zoom_track_nr = zoom_track_nr
+        else:
+            for i, track in enumerate(self.tracks):
+                if track.name == self.zoom_track_name:
+                    self.zoom_track_nr = i
+                    break
+        if self.zoom_track_nr is None:
+            self._create_zoom_track()
+
+        if isinstance(sequence, Sequence):
+            self.seq = sequence
+            self.from_sequence()
+        else:
+            self.seq = Sequence(filename=sequence_file)
+            self.to_sequence()
+
+    def _track_has_notes(self, track_nr):
+        return bool(
+            len([msg for msg in self.tracks[track_nr] if msg.type.startswith("note_")])
+        )
+
+    def _create_zoom_track(self):
+        self.tracks.append(MidiTrack())
+        self.zoom_track_nr = len(self.tracks) - 1
+        self.tracks[-1].name = self.zoom_track_name
 
     def duration2ticks(self, duration: int):
         return int(duration * self.tick_duration_ratio)
@@ -21,7 +62,7 @@ class ZoomMidiFile(MidiFile):
         if not isinstance(seq, Sequence):
             seq = self.seq
 
-        track = self.tracks[0]
+        track = self.tracks[self.zoom_track_nr]
         position = 0
         for msg in seq.to_messages(note_offset=self.note_offset):
             msg["time"] = self.duration2ticks(msg["position"] - position)  # delta
@@ -32,11 +73,11 @@ class ZoomMidiFile(MidiFile):
         if not isinstance(seq, Sequence):
             seq = self.seq
 
-        track = self.tracks[0]
+        track = self.tracks[self.zoom_track_nr]
         channels = [[], [], [], [], [], [], [], []]
         position = 0
-        for msg in track.messages:
-            if msg.type.startswitth("note_"):
+        for msg in track:
+            if msg.type.startswith("note_"):
                 channel_nr = msg.note - self.note_offset
                 channel = channels[channel_nr]
 
